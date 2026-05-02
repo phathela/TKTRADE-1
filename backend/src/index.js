@@ -83,6 +83,16 @@ async function start() {
     // Subscribe to default ticker
     bybitWS.subscribeTicker('BTCUSDT');
 
+    // Subscribe to kline data for chart population via WebSocket
+    // (REST API may be blocked by CloudFront geolocation restrictions)
+    const klineSymbols = ['BTCUSDT', 'ETHUSDT'];
+    const klineIntervals = ['1m', '5m', '15m', '1h', '4h', '1d'];
+    for (const sym of klineSymbols) {
+      for (const iv of klineIntervals) {
+        bybitWS.subscribeKline(sym, iv);
+      }
+    }
+
     // Try loading alerts (works only if DB available)
     try {
       await alertEngine.loadAlerts();

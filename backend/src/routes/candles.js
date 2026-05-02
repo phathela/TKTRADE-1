@@ -25,14 +25,27 @@ router.get('/:symbol/:interval', async (req, res) => {
           [symbol.toUpperCase(), interval, limit]
         );
       } catch (e) {
-        console.warn('DB query failed, falling back to Bybit REST:', e.message);
+        console.warn('DB query failed:', e.message);
       }
     }
 
-    // If DB not available or not enough data, fetch from Bybit
-    if (!result || result.rows.length < limit) {
-      const bybitInterval = INTERVAL_MAP[interval];
-      if (bybitInterval) {
+    // If DB has enough data, serve it directly — no REST fallback needed
+    if (result && result.rows.length >= limit) {
+      const formatted = result.rows.reverse().map(c => ({
+        time: c.open_time,
+        open: Number(c.open),
+        high: Number(c.high),
+        low: Number(c.low),
+        close: Number(c.close),
+        volume: Number(c.volume),
+      }));
+      return res.json({ symbol: symbol.toUpperCase(), interval, data: formatted });
+    }
+
+    // DB has some data but not enough — try REST to backfill, but don't fail if blocked
+    const bybitInterval = INTERVAL_MAP[interval];
+    if (bybitInterval) {
+      try {
         const bybitResult = await bybitRest.getKline(symbol.toUpperCase(), bybitInterval, limit);
         if (bybitResult?.result?.list) {
           const candles = bybitResult.result.list.reverse();
@@ -54,7 +67,7 @@ router.get('/:symbol/:interval', async (req, res) => {
                 );
               } catch (e) { /* skip duplicates */ }
             }
-            // Re-fetch from DB
+            // Re-fetch from DB (now includes backfilled rows)
             result = await query(
               `SELECT * FROM candles WHERE symbol=$1 AND interval=$2
                ORDER BY open_time DESC LIMIT $3`,
@@ -72,11 +85,14 @@ router.get('/:symbol/:interval', async (req, res) => {
             }))};
           }
         }
+      } catch (restErr) {
+        // REST API is blocked (e.g. CloudFront 403) — serve whatever we have from DB
+        console.warn(`Bybit REST unavailable for ${symbol}/${interval}: ${restErr.message}`);
       }
     }
 
-    // Format for lightweight-charts: { time: '2024-01-01', open, high, low, close }
-    if (!result || !result.rows) {
+    // Format and return whatever data we have (DB rows or empty)
+    if (!result || !result.rows || result.rows.length === 0) {
       return res.json({ symbol: symbol.toUpperCase(), interval, data: [] });
     }
     const formatted = result.rows.reverse().map(c => ({
@@ -88,12 +104,17 @@ router.get('/:symbol/:interval', async (req, res) => {
       volume: Number(c.volume),
     }));
 
+
     res.json({ symbol: symbol.toUpperCase(), interval, data: formatted });
   } catch (err) {
     console.error('Candles error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
+
+
+
+
 
 // GET /api/candles/history/:symbol/:interval
 router.get('/history/:symbol/:interval', async (req, res) => {

@@ -5,7 +5,7 @@ const { query } = require('../db');
 class BybitWebSocketService {
   constructor() {
     this.ws = null;
-    this.subscriptions = { ticker: {}, orderbook: {}, trade: {} };
+    this.subscriptions = { ticker: {}, orderbook: {}, trade: {}, kline: {} };
     this.listeners = new Map();
     this.reconnectAttempts = 0;
     this.maxReconnectAttempts = 10;
@@ -62,6 +62,15 @@ class BybitWebSocketService {
             this._emit('orderbook', symbol, msg.data);
           } else if (type === 'publicTrade' && msg.data) {
             this._emit('trade', symbol, msg.data);
+          } else if (type === 'kline' && parts.length === 3 && msg.data) {
+            // topic: kline.{interval}.{symbol}
+            const interval = parts[1];
+            const klineSymbol = parts[2];
+            const klines = Array.isArray(msg.data) ? msg.data : [msg.data];
+            for (const kline of klines) {
+              this._storeKline(kline, klineSymbol, interval);
+              this._emit('kline', klineSymbol, { interval, kline });
+            }
           }
         }
         // Store candle from ticker if available
@@ -92,6 +101,36 @@ class BybitWebSocketService {
            volume = candles.volume + EXCLUDED.volume,
            turnover = candles.turnover + EXCLUDED.turnover`,
         [symbol, ts, price, price, price, price, parseFloat(ticker.volume24h || 0) / 1440, 0]
+      );
+    } catch (err) {
+      // Silent — don't spam logs for storage
+    }
+  }
+
+  async _storeKline(kline, symbol, interval) {
+    try {
+      // Bybit kline fields: start, end, interval, open, close, high, low, volume, turnover, confirm, timestamp
+      const openTimeSec = Math.floor(parseInt(kline.start) / 1000);
+      const open = parseFloat(kline.open);
+      const high = parseFloat(kline.high);
+      const low = parseFloat(kline.low);
+      const close = parseFloat(kline.close);
+      const volume = parseFloat(kline.volume || 0);
+      const turnover = parseFloat(kline.turnover || 0);
+
+      if (!openTimeSec || !open) return;
+
+      await query(
+        `INSERT INTO candles (symbol, interval, open_time, open, high, low, close, volume, turnover)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (symbol, interval, open_time)
+         DO UPDATE SET
+           high = GREATEST(candles.high, EXCLUDED.high),
+           low = LEAST(candles.low, EXCLUDED.low),
+           close = EXCLUDED.close,
+           volume = EXCLUDED.volume,
+           turnover = EXCLUDED.turnover`,
+        [symbol, interval, openTimeSec, open, high, low, close, volume, turnover]
       );
     } catch (err) {
       // Silent — don't spam logs for storage
@@ -129,6 +168,19 @@ class BybitWebSocketService {
     this._send({ op: 'subscribe', args: [`publicTrade.${symbol}`] });
   }
 
+  subscribeKline(symbol, interval) {
+    const key = `${symbol}:${interval}`;
+    this.subscriptions.kline[key] = { symbol, interval };
+    this._send({ op: 'subscribe', args: [`kline.${interval}.${symbol}`] });
+    console.log(`Subscribed to kline.${interval}.${symbol}`);
+  }
+
+  unsubscribeKline(symbol, interval) {
+    const key = `${symbol}:${interval}`;
+    delete this.subscriptions.kline[key];
+    this._send({ op: 'unsubscribe', args: [`kline.${interval}.${symbol}`] });
+  }
+
   _send(msg) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(msg));
@@ -140,6 +192,7 @@ class BybitWebSocketService {
       ...Object.keys(this.subscriptions.ticker).map(s => `tickers.${s}`),
       ...Object.keys(this.subscriptions.orderbook).map(s => `orderbook.200.100ms.${s}`),
       ...Object.keys(this.subscriptions.trade).map(s => `publicTrade.${s}`),
+      ...Object.values(this.subscriptions.kline).map(({ symbol, interval }) => `kline.${interval}.${symbol}`),
     ];
     if (all.length > 0) {
       this._send({ op: 'subscribe', args: all });
