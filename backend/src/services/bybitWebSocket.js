@@ -2,6 +2,30 @@ const WebSocket = require('ws');
 const config = require('../config');
 const { query } = require('../db');
 
+// Maps our internal interval names to the format Bybit's WebSocket API expects.
+// Bybit uses plain numbers (minutes) for intraday intervals and letters for daily+.
+// See: https://bybit-exchange.github.io/docs/v5/websocket/public/kline
+const BYBIT_INTERVAL_MAP = {
+  '1m':  '1',
+  '3m':  '3',
+  '5m':  '5',
+  '15m': '15',
+  '30m': '30',
+  '1h':  '60',
+  '2h':  '120',
+  '4h':  '240',
+  '6h':  '360',
+  '12h': '720',
+  '1d':  'D',
+  '1w':  'W',
+  '1M':  'M',
+};
+
+// Reverse map: Bybit interval string → our internal interval name (for DB storage).
+const BYBIT_INTERVAL_REVERSE_MAP = Object.fromEntries(
+  Object.entries(BYBIT_INTERVAL_MAP).map(([internal, bybit]) => [bybit, internal])
+);
+
 class BybitWebSocketService {
   constructor() {
     this.ws = null;
@@ -98,14 +122,15 @@ class BybitWebSocketService {
           } else if (type === 'publicTrade' && msg.data) {
             this._emit('trade', symbol, msg.data);
           } else if (type === 'kline' && parts.length === 3 && msg.data) {
-            // topic: kline.{interval}.{symbol}
-            const interval = parts[1];
+            // topic: kline.{bybitInterval}.{symbol}  e.g. kline.1.BTCUSDT, kline.60.BTCUSDT
+            const bybitInterval = parts[1];
+            const internalInterval = BYBIT_INTERVAL_REVERSE_MAP[bybitInterval] ?? bybitInterval;
             const klineSymbol = parts[2];
             const klines = Array.isArray(msg.data) ? msg.data : [msg.data];
-            console.log(`[BybitWS] Processing ${klines.length} kline(s) for ${klineSymbol} @ ${interval}`);
+            console.log(`[BybitWS] Processing ${klines.length} kline(s) for ${klineSymbol} @ ${bybitInterval} (internal: "${internalInterval}")`);
             for (const kline of klines) {
-              this._storeKline(kline, klineSymbol, interval);
-              this._emit('kline', klineSymbol, { interval, kline });
+              this._storeKline(kline, klineSymbol, bybitInterval);
+              this._emit('kline', klineSymbol, { interval: internalInterval, kline });
             }
           }
         }
@@ -146,6 +171,8 @@ class BybitWebSocketService {
   async _storeKline(kline, symbol, interval) {
     try {
       // Bybit kline fields: start, end, interval, open, close, high, low, volume, turnover, confirm, timestamp
+      // `interval` here is the Bybit format (e.g. "1", "60", "D") — reverse-map to our internal name for DB.
+      const internalInterval = BYBIT_INTERVAL_REVERSE_MAP[interval] ?? interval;
       const openTimeSec = Math.floor(parseInt(kline.start) / 1000);
       const open = parseFloat(kline.open);
       const high = parseFloat(kline.high);
@@ -166,7 +193,7 @@ class BybitWebSocketService {
            close = EXCLUDED.close,
            volume = EXCLUDED.volume,
            turnover = EXCLUDED.turnover`,
-        [symbol, interval, openTimeSec, open, high, low, close, volume, turnover]
+        [symbol, internalInterval, openTimeSec, open, high, low, close, volume, turnover]
       );
     } catch (err) {
       // Silent — don't spam logs for storage
@@ -207,14 +234,17 @@ class BybitWebSocketService {
   subscribeKline(symbol, interval) {
     const key = `${symbol}:${interval}`;
     this.subscriptions.kline[key] = { symbol, interval };
-    this._send({ op: 'subscribe', args: [`kline.${interval}.${symbol}`] });
-    console.log(`Subscribed to kline.${interval}.${symbol}`);
+    const bybitInterval = BYBIT_INTERVAL_MAP[interval] ?? interval;
+    const topic = `kline.${bybitInterval}.${symbol}`;
+    console.log(`[BybitWS] Subscribing to kline — internal: "${interval}", Bybit topic: "${topic}"`);
+    this._send({ op: 'subscribe', args: [topic] });
   }
 
   unsubscribeKline(symbol, interval) {
     const key = `${symbol}:${interval}`;
     delete this.subscriptions.kline[key];
-    this._send({ op: 'unsubscribe', args: [`kline.${interval}.${symbol}`] });
+    const bybitInterval = BYBIT_INTERVAL_MAP[interval] ?? interval;
+    this._send({ op: 'unsubscribe', args: [`kline.${bybitInterval}.${symbol}`] });
   }
 
   _send(msg) {
@@ -232,7 +262,10 @@ class BybitWebSocketService {
       ...Object.keys(this.subscriptions.ticker).map(s => `tickers.${s}`),
       ...Object.keys(this.subscriptions.orderbook).map(s => `orderbook.200.100ms.${s}`),
       ...Object.keys(this.subscriptions.trade).map(s => `publicTrade.${s}`),
-      ...Object.values(this.subscriptions.kline).map(({ symbol, interval }) => `kline.${interval}.${symbol}`),
+      ...Object.values(this.subscriptions.kline).map(({ symbol, interval }) => {
+        const bybitInterval = BYBIT_INTERVAL_MAP[interval] ?? interval;
+        return `kline.${bybitInterval}.${symbol}`;
+      }),
     ];
     if (all.length > 0) {
       this._send({ op: 'subscribe', args: all });
