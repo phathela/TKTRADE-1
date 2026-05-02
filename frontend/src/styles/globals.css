@@ -249,6 +249,7 @@ button {
 .chart-container {
   flex: 1;
   position: relative;
+  min-height: 200px;
 }
 
 /* Modal */

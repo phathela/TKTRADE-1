@@ -18,7 +18,7 @@ export default function TradingChart({
   const indicatorSeriesRef = useRef({});
   const pineSeriesRef = useRef({});
   const candleDataRef = useRef([]);
-  const [chartReady, setChartReady] = useState(false);
+  const [chartVersion, setChartVersion] = useState(0);
   const [currentPrice, setCurrentPrice] = useState(null);
   const [priceChange, setPriceChange] = useState(null);
   const [isPositive, setIsPositive] = useState(true);
@@ -67,12 +67,18 @@ export default function TradingChart({
     chartRef.current = chart;
     candleSeriesRef.current = candleSeries;
 
+    // Re-apply cached data if available (e.g., after theme-change recreation)
+    if (candleDataRef.current.length > 0) {
+      candleSeries.setData(candleDataRef.current);
+      setTimeout(() => chart.timeScale().fitContent(), 50);
+    }
+
     const observer = new ResizeObserver(() => {
       chart.applyOptions({ width: containerRef.current.clientWidth, height: containerRef.current.clientHeight });
     });
     observer.observe(containerRef.current);
 
-    setChartReady(true);
+    setChartVersion(v => v + 1);
     onReady?.();
 
     return () => {
@@ -114,7 +120,7 @@ export default function TradingChart({
       if (chartRef.current) chartRef.current.timeScale().fitContent();
     }, 100);
     return () => clearTimeout(timer);
-  }, [symbol, interval]);
+  }, [symbol, interval, chartVersion]);
 
   // Real-time ticker updates
   useEffect(() => {
