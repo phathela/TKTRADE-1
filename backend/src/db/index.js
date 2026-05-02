@@ -10,6 +10,7 @@ let dbReadyReject = null;
 if (config.databaseUrl) {
   pool = new Pool({
     connectionString: config.databaseUrl,
+    ssl: { rejectUnauthorized: false },
     max: 20,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
