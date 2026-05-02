@@ -47,9 +47,44 @@ class BybitWebSocketService {
   }
 
   _handleMessage(data) {
+    const raw = data.toString();
+    console.log('[BybitWS] Raw message received:', raw);
+
     try {
-      const msg = JSON.parse(data.toString());
-      if (msg.op === 'pong') return;
+      const msg = JSON.parse(raw);
+
+      // Log pong responses so we can confirm the connection is alive
+      if (msg.op === 'pong' || msg.ret_msg === 'pong') {
+        console.log('[BybitWS] Pong received');
+        return;
+      }
+
+      // Log subscription confirmations and any error/rejection responses from Bybit
+      if (msg.op === 'subscribe' || msg.success !== undefined) {
+        if (msg.success === true) {
+          console.log('[BybitWS] Subscription confirmed:', JSON.stringify(msg));
+        } else if (msg.success === false) {
+          console.error('[BybitWS] Subscription REJECTED by Bybit:', JSON.stringify(msg));
+        } else {
+          console.log('[BybitWS] Op response:', JSON.stringify(msg));
+        }
+        return;
+      }
+
+      // Log any explicit error messages from Bybit (e.g. auth required, invalid topic)
+      if (msg.type === 'error' || msg.ret_code !== undefined && msg.ret_code !== 0) {
+        console.error('[BybitWS] Error message from Bybit:', JSON.stringify(msg));
+        return;
+      }
+
+      // Log every data-bearing message so we can confirm topics are flowing
+      if (msg.topic) {
+        console.log(`[BybitWS] Data message on topic "${msg.topic}" (type=${msg.type}), data length=${Array.isArray(msg.data) ? msg.data.length : (msg.data ? 1 : 0)}`);
+      } else {
+        // Unexpected message shape — log it in full so nothing is silently dropped
+        console.log('[BybitWS] Unrecognised message shape:', JSON.stringify(msg));
+      }
+
       if (msg.type === 'snapshot' || msg.type === 'delta' || msg.data) {
         const topic = msg.topic || '';
         const parts = topic.split('.');
@@ -67,6 +102,7 @@ class BybitWebSocketService {
             const interval = parts[1];
             const klineSymbol = parts[2];
             const klines = Array.isArray(msg.data) ? msg.data : [msg.data];
+            console.log(`[BybitWS] Processing ${klines.length} kline(s) for ${klineSymbol} @ ${interval}`);
             for (const kline of klines) {
               this._storeKline(kline, klineSymbol, interval);
               this._emit('kline', klineSymbol, { interval, kline });
@@ -79,7 +115,7 @@ class BybitWebSocketService {
         }
       }
     } catch (err) {
-      console.error('WS message parse error:', err.message);
+      console.error('[BybitWS] Message parse error:', err.message, '| Raw:', raw);
     }
   }
 
@@ -183,7 +219,11 @@ class BybitWebSocketService {
 
   _send(msg) {
     if (this.ws?.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg));
+      const payload = JSON.stringify(msg);
+      console.log('[BybitWS] Sending:', payload);
+      this.ws.send(payload);
+    } else {
+      console.warn('[BybitWS] Cannot send — socket not open (readyState:', this.ws?.readyState, '). Message:', JSON.stringify(msg));
     }
   }
 
