@@ -1,4 +1,4 @@
-const { query } = require('./index');
+const { query, isAvailable } = require('./index');
 
 const MIGRATIONS = [
   // Candles/storage for historical data
@@ -75,6 +75,10 @@ const MIGRATIONS = [
 ];
 
 async function runMigrations() {
+  if (!isAvailable()) {
+    console.log('Database not available, skipping migrations.');
+    return;
+  }
   console.log('Running database migrations...');
   for (const sql of MIGRATIONS) {
     try {

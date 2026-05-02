@@ -7,6 +7,7 @@ const morgan = require('morgan');
 const path = require('path');
 const config = require('./config');
 const { runMigrations } = require('./db/migrations');
+const { isAvailable } = require('./db');
 const { setupSocket } = require('./socket');
 const bybitWS = require('./services/bybitWebSocket');
 const alertEngine = require('./services/alertEngine');
@@ -34,7 +35,11 @@ app.use(express.json());
 
 // Health check
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({
+    status: 'ok',
+    database: isAvailable() ? 'connected' : 'unavailable',
+    timestamp: new Date().toISOString(),
+  });
 });
 
 // API Routes
@@ -62,8 +67,12 @@ setupSocket(io);
 // Start server
 async function start() {
   try {
-    // Run database migrations
-    await runMigrations();
+    // Try migrations, don't fail if DB not available
+    try {
+      await runMigrations();
+    } catch (err) {
+      console.warn('Migrations skipped:', err.message);
+    }
 
     // Start Bybit WebSocket connection
     bybitWS.connect();
@@ -71,16 +80,23 @@ async function start() {
     // Subscribe to default ticker
     bybitWS.subscribeTicker('BTCUSDT');
 
-    // Load active alerts
-    await alertEngine.loadAlerts();
-    alertEngine.start();
+    // Try loading alerts (works only if DB available)
+    try {
+      await alertEngine.loadAlerts();
+      alertEngine.start();
+    } catch (err) {
+      console.warn('Alert engine skipped:', err.message);
+    }
 
     server.listen(config.port, () => {
       console.log(`TKTRADE backend running on port ${config.port} (${config.nodeEnv})`);
     });
   } catch (err) {
     console.error('Startup error:', err);
-    process.exit(1);
+    // Don't crash on startup - let the health check report issues
+    server.listen(config.port, () => {
+      console.log(`TKTRADE backend running on port ${config.port} (degraded mode)`);
+    });
   }
 }
 
