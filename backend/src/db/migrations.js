@@ -66,6 +66,8 @@ const MIGRATIONS = [
     status VARCHAR(20) DEFAULT 'sent',
     created_at TIMESTAMP DEFAULT NOW()
   )`,
+  // Pine Script parsed config column
+  `ALTER TABLE strategies ADD COLUMN IF NOT EXISTS parsed_config JSONB DEFAULT NULL`,
   // Create indexes
   `CREATE INDEX IF NOT EXISTS idx_candles_lookup ON candles(symbol, interval, open_time DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_alerts_status ON alerts(status)`,

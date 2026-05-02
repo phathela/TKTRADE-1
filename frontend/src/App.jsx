@@ -13,7 +13,9 @@ export default function App() {
   const [symbol, setSymbol] = useState(DEFAULT_SYMBOL);
   const [interval, setInterval] = useState('1h');
   const [sidePanel, setSidePanel] = useState(null); // null | 'indicators' | 'alerts' | 'backtest'
+  const [indicatorTab, setIndicatorTab] = useState('builtin'); // 'builtin' | 'pine'
   const [activeIndicators, setActiveIndicators] = useState([]);
+  const [activePineScripts, setActivePineScripts] = useState([]);
   const [alertDialogOpen, setAlertDialogOpen] = useState(false);
   const [drawingMode, setDrawingMode] = useState(null);
   const [chartReady, setChartReady] = useState(false);
@@ -47,6 +49,25 @@ export default function App() {
     setActiveIndicators(prev => prev.map(i =>
       i.instanceId === instanceId ? { ...i, params: { ...i.defaultParams, ...params } } : i
     ));
+  };
+
+  // Pine Script handlers
+  const handleDisplayPineOnChart = (pineScript, removeId) => {
+    if (removeId) {
+      // Remove a Pine Script indicator
+      setActivePineScripts(prev => prev.filter(ps => ps.id !== removeId));
+    } else if (pineScript) {
+      // Add or update
+      setActivePineScripts(prev => {
+        const existing = prev.findIndex(ps => ps.id === pineScript.id);
+        if (existing >= 0) {
+          const updated = [...prev];
+          updated[existing] = pineScript;
+          return updated;
+        }
+        return [...prev, pineScript];
+      });
+    }
   };
 
   const handleChartReady = useCallback(() => {
@@ -111,6 +132,7 @@ export default function App() {
             interval={interval}
             theme={theme}
             activeIndicators={activeIndicators}
+            activePineScripts={activePineScripts}
             drawingMode={drawingMode}
             onDrawingMode={toggleDrawingMode}
             onReady={handleChartReady}
@@ -124,16 +146,34 @@ export default function App() {
           {sidePanel === 'indicators' && (
             <>
               <div className="side-panel-header">
-                <span>Indicators</span>
+                <span>Indicators & Strategies</span>
                 <button className="btn-secondary" onClick={() => setSidePanel(null)} style={{ padding: '2px 8px', fontSize: 14 }}>&times;</button>
               </div>
               <div className="side-panel-content">
-                <IndicatorPanel
-                  activeIndicators={activeIndicators}
-                  onAdd={handleAddIndicator}
-                  onRemove={handleRemoveIndicator}
-                  onUpdate={handleUpdateIndicator}
-                />
+                <div className="tabs" style={{ marginBottom: 10 }}>
+                  <button className={`tab-btn ${indicatorTab === 'builtin' ? 'active' : ''}`} onClick={() => setIndicatorTab('builtin')}>
+                    Built-in
+                  </button>
+                  <button className={`tab-btn ${indicatorTab === 'pine' ? 'active' : ''}`} onClick={() => setIndicatorTab('pine')}>
+                    Pine Script
+                  </button>
+                </div>
+
+                {indicatorTab === 'builtin' ? (
+                  <IndicatorPanel
+                    activeIndicators={activeIndicators}
+                    onAdd={handleAddIndicator}
+                    onRemove={handleRemoveIndicator}
+                    onUpdate={handleUpdateIndicator}
+                  />
+                ) : (
+                  <StrategyUploader
+                    symbol={symbol}
+                    interval={interval}
+                    onDisplayOnChart={handleDisplayPineOnChart}
+                    activePineScripts={activePineScripts}
+                  />
+                )}
               </div>
             </>
           )}
