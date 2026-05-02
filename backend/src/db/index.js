@@ -3,6 +3,9 @@ const config = require('../config');
 
 let pool = null;
 let dbAvailable = false;
+let dbReadyPromise = null;
+let dbReadyResolve = null;
+let dbReadyReject = null;
 
 if (config.databaseUrl) {
   pool = new Pool({
@@ -17,20 +20,37 @@ if (config.databaseUrl) {
     dbAvailable = false;
   });
 
-  // Test connection
+  // Test connection — store promise so server can await it on startup
+  dbReadyPromise = new Promise((resolve, reject) => {
+    dbReadyResolve = resolve;
+    dbReadyReject = reject;
+  });
+
   pool.query('SELECT 1')
     .then(() => {
       dbAvailable = true;
       console.log('Database connected');
+      dbReadyResolve();
     })
     .catch((err) => {
       console.warn('Database unavailable:', err.message);
       console.warn('App will run without persistence (charting works, alerts/backtest will not save)');
       dbAvailable = false;
+      dbReadyResolve(); // resolve anyway so server starts in degraded mode
     });
 } else {
   console.warn('No DATABASE_URL configured. Database features disabled.');
   console.warn('Set DATABASE_URL or PGHOST/PGUSER/PGDATABASE env vars to enable persistence.');
+  // No DB is fine — resolve immediately
+  dbReadyPromise = Promise.resolve();
+}
+
+/**
+ * Wait for the database connection test to complete.
+ * Resolves even if the DB is unavailable (degraded mode).
+ */
+async function waitForDb() {
+  await dbReadyPromise;
 }
 
 async function query(text, params) {
@@ -50,4 +70,4 @@ function isAvailable() {
   return dbAvailable;
 }
 
-module.exports = { pool, query, isAvailable };
+module.exports = { pool, query, isAvailable, waitForDb };

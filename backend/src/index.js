@@ -7,7 +7,7 @@ const morgan = require('morgan');
 const path = require('path');
 const config = require('./config');
 const { runMigrations } = require('./db/migrations');
-const { isAvailable } = require('./db');
+const { isAvailable, waitForDb } = require('./db');
 const { setupSocket } = require('./socket');
 const bybitWS = require('./services/bybitWebSocket');
 const alertEngine = require('./services/alertEngine');
@@ -67,6 +67,9 @@ setupSocket(io);
 // Start server
 async function start() {
   try {
+    // Wait for database connection test to complete
+    await waitForDb();
+
     // Try migrations, don't fail if DB not available
     try {
       await runMigrations();
