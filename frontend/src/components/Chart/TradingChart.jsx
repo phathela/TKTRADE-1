@@ -67,8 +67,21 @@ export default function TradingChart({
     chartRef.current = chart;
     candleSeriesRef.current = candleSeries;
 
+    console.debug('[TradingChart] Chart initialized', {
+      theme,
+      containerSize: {
+        width: containerRef.current.clientWidth,
+        height: containerRef.current.clientHeight,
+      },
+    });
+
     // Re-apply cached data if available (e.g., after theme-change recreation)
     if (candleDataRef.current.length > 0) {
+      console.debug('[TradingChart] Re-applying cached candle data after chart recreation', {
+        cachedCandles: candleDataRef.current.length,
+        firstCandle: candleDataRef.current[0],
+        lastCandle: candleDataRef.current[candleDataRef.current.length - 1],
+      });
       candleSeries.setData(candleDataRef.current);
       setTimeout(() => chart.timeScale().fitContent(), 50);
     }
@@ -105,16 +118,66 @@ export default function TradingChart({
   useEffect(() => {
     if (!candleSeriesRef.current) return;
 
+    console.debug('[TradingChart] Fetching candles', { symbol, interval });
+
     fetchCandles(symbol, interval).then(data => {
-      if (data?.data) {
+      console.debug('[TradingChart] fetchCandles raw response', data);
+
+      if (!data) {
+        console.error('[TradingChart] fetchCandles returned null/undefined');
+        return;
+      }
+
+      if (!data.data) {
+        console.error('[TradingChart] Response missing .data array — got keys:', Object.keys(data));
+        return;
+      }
+
+      if (!Array.isArray(data.data)) {
+        console.error('[TradingChart] data.data is not an array — type:', typeof data.data, 'value:', data.data);
+        return;
+      }
+
+      if (data.data.length === 0) {
+        console.warn('[TradingChart] data.data is an empty array — no candles to render');
+        return;
+      }
+
+      const firstCandle = data.data[0];
+      const lastCandle = data.data[data.data.length - 1];
+      const expectedFields = ['time', 'open', 'high', 'low', 'close'];
+      const missingFields = expectedFields.filter(f => !(f in firstCandle));
+
+      console.debug('[TradingChart] Candle data summary', {
+        count: data.data.length,
+        firstCandle,
+        lastCandle,
+        missingFields: missingFields.length > 0 ? missingFields : 'none',
+        actualFields: Object.keys(firstCandle),
+      });
+
+      if (missingFields.length > 0) {
+        console.error('[TradingChart] Candles are missing required fields:', missingFields,
+          '— lightweight-charts requires { time, open, high, low, close }');
+      }
+
+      try {
+        console.debug('[TradingChart] Calling candleSeries.setData() with', data.data.length, 'candles');
         candleSeriesRef.current.setData(data.data);
         candleDataRef.current = data.data;
-        if (data.data.length > 0) {
-          const last = data.data[data.data.length - 1];
-          setCurrentPrice(last.close);
-        }
+        console.debug('[TradingChart] candleSeries.setData() succeeded');
+      } catch (e) {
+        console.error('[TradingChart] candleSeries.setData() threw an error:', e);
+        return;
       }
-    }).catch(console.error);
+
+      if (data.data.length > 0) {
+        const last = data.data[data.data.length - 1];
+        setCurrentPrice(last.close);
+      }
+    }).catch(err => {
+      console.error('[TradingChart] fetchCandles network/API error:', err);
+    });
 
     const timer = setTimeout(() => {
       if (chartRef.current) chartRef.current.timeScale().fitContent();
